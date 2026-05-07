@@ -1,0 +1,21 @@
+export type Caregiver = {
+  id: string;
+  name: string;
+  photo?: string;
+  photoURL?: string;
+  type: string[];
+  gender: "Male" | "Female";
+  experienceYears: number;
+  rating: number;
+  reviews: number;
+  hourlyRate: number;
+  location: string;
+  languages: string[];
+  bio: string;
+  skills: string[];
+  certifications: string[];
+  verified: boolean;
+  availableNow: boolean;
+  visaStatus: string;
+  phone?: string;
+};
