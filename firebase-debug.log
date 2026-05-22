@@ -1,0 +1,22 @@
+[debug] [2026-05-20T08:09:41.031Z] ----------------------------------------------------------------------
+[debug] [2026-05-20T08:09:41.034Z] Command:       /Users/balaadithya/.nvm/versions/node/v24.13.0/bin/node /Users/balaadithya/.npm/_npx/ba4f1959e38407b5/node_modules/.bin/firebase apps:list --project care-bridge-375c8
+[debug] [2026-05-20T08:09:41.034Z] CLI Version:   15.18.0
+[debug] [2026-05-20T08:09:41.034Z] Platform:      darwin
+[debug] [2026-05-20T08:09:41.034Z] Node Version:  v24.13.0
+[debug] [2026-05-20T08:09:41.034Z] Time:          Wed May 20 2026 13:39:41 GMT+0530 (India Standard Time)
+[debug] [2026-05-20T08:09:41.034Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-05-20T08:09:41.148Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-05-20T08:09:41.149Z] > authorizing via signed-in user (balubaladithya@gmail.com)
+[debug] [2026-05-20T08:09:41.151Z] Checked if tokens are valid: true, expires at: 1779268143593
+[debug] [2026-05-20T08:09:41.151Z] Checked if tokens are valid: true, expires at: 1779268143593
+[debug] [2026-05-20T08:09:41.152Z] >>> [apiv2][query] GET https://firebase.googleapis.com/v1beta1/projects/care-bridge-375c8:searchApps pageSize=100
+[debug] [2026-05-20T08:09:42.468Z] <<< [apiv2][status] GET https://firebase.googleapis.com/v1beta1/projects/care-bridge-375c8:searchApps 403
+[debug] [2026-05-20T08:09:42.468Z] <<< [apiv2][body] GET https://firebase.googleapis.com/v1beta1/projects/care-bridge-375c8:searchApps {"error":{"code":403,"message":"The caller does not have permission","status":"PERMISSION_DENIED"}}
+[debug] [2026-05-20T08:09:42.468Z] Request to https://firebase.googleapis.com/v1beta1/projects/care-bridge-375c8:searchApps?pageSize=100 had HTTP Error: 403, The caller does not have permission
+[debug] [2026-05-20T08:09:42.609Z] FirebaseError: Request to https://firebase.googleapis.com/v1beta1/projects/care-bridge-375c8:searchApps?pageSize=100 had HTTP Error: 403, The caller does not have permission
+    at responseToError (/Users/balaadithya/.npm/_npx/ba4f1959e38407b5/node_modules/firebase-tools/lib/responseToError.js:53:12)
+    at RetryOperation._fn (/Users/balaadithya/.npm/_npx/ba4f1959e38407b5/node_modules/firebase-tools/lib/apiv2.js:333:77)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+[error] 
+[error] Error: Failed to list Firebase apps. See firebase-debug.log for more info.

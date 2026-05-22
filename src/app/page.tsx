@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { Search, Heart, Shield, Clock, Star, CheckCircle2, ArrowRight } from "lucide-react"
+import { Search, Heart, Shield, Star, CheckCircle2, ArrowRight } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useState, useEffect } from "react"
 import { collection, query, limit, getDocs, where } from "firebase/firestore"
@@ -9,33 +9,59 @@ import { db } from "@/lib/firebase"
 import { type Caregiver } from "@/types"
 import { CaregiverCard } from "@/components/shared/CaregiverCard"
 import { useAuth } from "@/context/AuthContext"
+import { caregivers as mockCaregivers, reviews as mockReviews } from "@/lib/data"
+
+interface Review {
+  id: string;
+  author: string;
+  date: string;
+  rating: number;
+  text: string;
+}
 
 export default function Home() {
-  const { user, userData } = useAuth()
+  const { userData, isDemoMode } = useAuth()
   const [featuredCaregivers, setFeaturedCaregivers] = useState<Caregiver[]>([])
-  const [liveReviews, setLiveReviews] = useState<any[]>([])
+  const [liveReviews, setLiveReviews] = useState<Review[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     const fetchData = async () => {
       try {
+        if (isDemoMode) {
+          throw new Error("Demo mode is active");
+        }
         // Fetch Featured Caregivers
         const cgQuery = query(collection(db, "users"), where("role", "==", "caregiver"), limit(3));
         const cgSnap = await getDocs(cgQuery);
-        setFeaturedCaregivers(cgSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Caregiver)));
+        
+        const caregiversList = cgSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Caregiver));
+        if (caregiversList.length === 0) {
+          // If Firestore is empty (e.g. fresh project setup), use high-fidelity mocks
+          setFeaturedCaregivers(mockCaregivers.slice(0, 3) as unknown as Caregiver[]);
+        } else {
+          setFeaturedCaregivers(caregiversList);
+        }
 
         // Fetch Featured Reviews
         const revQuery = query(collection(db, "reviews"), limit(2));
         const revSnap = await getDocs(revQuery);
-        setLiveReviews(revSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+        const reviewsList = revSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Review));
+        if (reviewsList.length === 0) {
+          setLiveReviews(mockReviews);
+        } else {
+          setLiveReviews(reviewsList);
+        }
       } catch (err) {
-        console.error("Error fetching home data:", err);
+        console.warn("Home Firestore query failed, falling back to rich mock data:", err);
+        setFeaturedCaregivers(mockCaregivers.slice(0, 3) as unknown as Caregiver[]);
+        setLiveReviews(mockReviews);
       } finally {
         setLoading(false);
       }
     };
     fetchData();
-  }, []);
+  }, [isDemoMode]);
 
   return (
     <div className="flex flex-col min-h-screen">
@@ -162,7 +188,7 @@ export default function Home() {
             <div>
               <h2 className="text-3xl font-bold text-slate-900 mb-6">Why families trust CareBridge</h2>
               <p className="text-lg text-slate-600 mb-8">
-                We understand that inviting someone into your home to care for a loved one is a huge decision. We've built CareBridge to provide absolute peace of mind.
+                {"We understand that inviting someone into your home to care for a loved one is a huge decision. We've built CareBridge to provide absolute peace of mind."}
               </p>
               
               <div className="space-y-6">
@@ -249,9 +275,9 @@ export default function Home() {
               liveReviews.map(review => (
                 <div key={review.id} className="bg-primary-800/50 p-8 rounded-2xl border border-primary-700 backdrop-blur-sm">
                   <div className="flex text-amber-400 mb-4">
-                    {[...Array(Math.floor(review.rating || 5))].map((_, i) => <Star key={i} className="w-5 h-5 fill-current" />)}
+                    {[...Array(Math.max(0, Math.min(5, Math.floor(Number(review.rating) || 5))))].map((_, i) => <Star key={i} className="w-5 h-5 fill-current" />)}
                   </div>
-                  <p className="text-lg leading-relaxed text-primary-50 mb-6">"{review.text}"</p>
+                  <p className="text-lg leading-relaxed text-primary-50 mb-6">&ldquo;{review.text}&rdquo;</p>
                   <div className="flex items-center justify-between text-sm">
                     <span className="font-semibold">{review.author}</span>
                     <span className="text-primary-300">{review.date}</span>

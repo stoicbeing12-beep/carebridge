@@ -4,10 +4,24 @@ import { useState, useEffect } from "react"
 import { useParams, useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
-import { Check, ChevronLeft, Calendar as CalendarIcon, Clock, ShieldCheck, MapPin } from "lucide-react"
+import { Check, ChevronLeft, Calendar as CalendarIcon, ShieldCheck, MapPin } from "lucide-react"
 import { useAuth } from "@/context/AuthContext"
-import { doc, getDoc, collection, addDoc } from "firebase/firestore"
+import { doc, getDoc, collection, addDoc, query, where, getDocs } from "firebase/firestore"
 import { db } from "@/lib/firebase"
+import { type Caregiver } from "@/types"
+
+interface Booking {
+  id: string;
+  status: "accepted" | "pending" | "completed" | "rejected";
+  caregiverName: string;
+  caregiverId: string;
+  serviceType: string;
+  startDate: string;
+  timeSlot: string;
+  totalAmount: number;
+  userId: string;
+  createdAt?: { seconds: number; nanoseconds: number } | null | unknown;
+}
 
 export default function BookingPage() {
   const params = useParams()
@@ -15,11 +29,11 @@ export default function BookingPage() {
   const id = params.id as string
   const { user, loading: authLoading } = useAuth()
 
-  const [caregiver, setCaregiver] = useState<any>(null)
+  const [caregiver, setCaregiver] = useState<Caregiver | null>(null)
   const [step, setStep] = useState(1)
   const [loading, setLoading] = useState(false)
   const [bookingDetails, setBookingDetails] = useState({
-    startDate: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+    startDate: new Date().toISOString().split('T')[0],
     timeSlot: "08:00 AM - 08:00 PM",
     serviceType: "Elder Care",
     hoursPerDay: 12,
@@ -31,17 +45,90 @@ export default function BookingPage() {
       const docRef = doc(db, "users", id)
       const snap = await getDoc(docRef)
       if (snap.exists()) {
-        setCaregiver({ id: snap.id, ...snap.data() })
+        const data = snap.data()
+        const rest = data ? { ...data } : {}
+        delete (rest as Record<string, unknown>).id
+        setCaregiver({ id: snap.id, ...rest } as Caregiver)
+        setBookingDetails(prev => ({
+          ...prev,
+          serviceType: data.type?.[0] || "Elder Care"
+        }))
       }
     }
     fetchCaregiver()
   }, [id])
 
   const handleCompleteBooking = async () => {
-    if (!user) return;
+    if (!user || !caregiver) return;
     setLoading(true);
+
+    // Double booking prevention check
     try {
-      await addDoc(collection(db, "bookings"), {
+      // 1. Check local storage first
+      const localBookingsRaw = localStorage.getItem("carebridge_bookings");
+      const localBookings = localBookingsRaw ? JSON.parse(localBookingsRaw) : [];
+      const conflictLocal = localBookings.some((b: Booking) => 
+        b.caregiverId === caregiver.id &&
+        b.startDate === bookingDetails.startDate &&
+        b.timeSlot === bookingDetails.timeSlot &&
+        (b.status === "accepted" || b.status === "pending")
+      );
+
+      if (conflictLocal) {
+        alert(`Sorry, ${caregiver.name} is already booked for ${bookingDetails.startDate} during ${bookingDetails.timeSlot}. Please choose a different date or time slot.`);
+        setLoading(false);
+        return;
+      }
+
+      // 2. Check Firestore bookings
+      const q = query(
+        collection(db, "bookings"),
+        where("caregiverId", "==", caregiver.id),
+        where("startDate", "==", bookingDetails.startDate),
+        where("timeSlot", "==", bookingDetails.timeSlot)
+      );
+      const snap = await getDocs(q);
+      const conflictFirestore = snap.docs.some(doc => {
+        const data = doc.data();
+        return data.status === "accepted" || data.status === "pending";
+      });
+
+      if (conflictFirestore) {
+        alert(`Sorry, ${caregiver.name} is already booked for ${bookingDetails.startDate} during ${bookingDetails.timeSlot}. Please choose a different date or time slot.`);
+        setLoading(false);
+        return;
+      }
+    } catch (e) {
+      console.warn("Conflict check failed, proceeding with booking:", e);
+    }
+    
+    const newBooking = {
+      id: "b-local-" + Date.now(),
+      caregiverId: caregiver.id,
+      caregiverName: caregiver.name || "Caregiver",
+      userId: user.uid,
+      clientName: user.displayName || "User",
+      status: "pending" as const,
+      createdAt: { seconds: Math.floor(Date.now() / 1000), nanoseconds: 0 },
+      serviceType: bookingDetails.serviceType,
+      totalAmount: (caregiver.hourlyRate || 50) * bookingDetails.hoursPerDay * bookingDetails.days,
+      hours: bookingDetails.hoursPerDay * bookingDetails.days,
+      startDate: bookingDetails.startDate,
+      timeSlot: bookingDetails.timeSlot
+    };
+
+    // Save to localStorage for demo persistence
+    try {
+      const localBookingsRaw = localStorage.getItem("carebridge_bookings");
+      const localBookings = localBookingsRaw ? JSON.parse(localBookingsRaw) : [];
+      localBookings.unshift(newBooking);
+      localStorage.setItem("carebridge_bookings", JSON.stringify(localBookings));
+    } catch (e) {
+      console.warn("Failed to save booking to local storage:", e);
+    }
+
+    try {
+      const docRef = await addDoc(collection(db, "bookings"), {
         caregiverId: caregiver.id,
         caregiverName: caregiver.name || "Caregiver",
         userId: user.uid,
@@ -50,18 +137,36 @@ export default function BookingPage() {
         createdAt: new Date(),
         serviceType: bookingDetails.serviceType,
         totalAmount: (caregiver.hourlyRate || 50) * bookingDetails.hoursPerDay * bookingDetails.days,
+        hours: bookingDetails.hoursPerDay * bookingDetails.days,
         startDate: bookingDetails.startDate,
         timeSlot: bookingDetails.timeSlot
-      })
+      });
+      
+      // Update local storage booking ID to match the live Firestore ID
+      try {
+        const localBookingsRaw = localStorage.getItem("carebridge_bookings");
+        if (localBookingsRaw) {
+          const localBookings = JSON.parse(localBookingsRaw);
+          const updatedLocal = localBookings.map((b: { id: string }) => 
+            b.id === newBooking.id ? { ...b, id: docRef.id } : b
+          );
+          localStorage.setItem("carebridge_bookings", JSON.stringify(updatedLocal));
+        }
+      } catch (e) {
+        console.warn("Failed to sync local booking ID with Firestore:", e);
+      }
+      
       router.push("/dashboard");
     } catch (error) {
       console.error("Booking error:", error);
+      // Even if Firestore fails, redirect since it's saved in local storage
+      router.push("/dashboard");
     } finally {
       setLoading(false);
     }
-  }
+  };
 
-  const totalSteps = 4
+  const totalSteps = 3
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -107,7 +212,7 @@ export default function BookingPage() {
                 style={{ width: `${((step - 1) / (totalSteps - 1)) * 100}%` }}
               />
             </div>
-            {[1, 2, 3, 4].map(s => (
+            {[1, 2, 3].map(s => (
               <div 
                 key={s} 
                 className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold shadow-sm transition-colors ${
@@ -123,8 +228,7 @@ export default function BookingPage() {
           <div className="flex justify-between text-xs font-medium text-slate-500 mt-2 px-1">
             <span>Details</span>
             <span>Schedule</span>
-            <span>Summary</span>
-            <span>Payment</span>
+            <span>Summary & Confirm</span>
           </div>
         </div>
 
@@ -137,13 +241,26 @@ export default function BookingPage() {
                 <h2 className="text-xl font-bold text-slate-900 mb-4">What type of care do you need?</h2>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {caregiver.type?.map((t: string) => (
-                    <label key={t} className="relative flex cursor-pointer rounded-xl border border-slate-200 bg-white p-4 shadow-sm hover:border-primary-200 focus:outline-none">
-                      <input type="radio" name="careType" value={t} className="peer sr-only" />
+                    <label 
+                      key={t} 
+                      className={`relative flex cursor-pointer rounded-xl border p-4 shadow-sm focus:outline-none transition-all ${
+                        bookingDetails.serviceType === t 
+                          ? "border-primary-500 bg-primary-50/10 text-primary-700 font-semibold" 
+                          : "border-slate-200 bg-white hover:border-primary-200 text-slate-900"
+                      }`}
+                    >
+                      <input 
+                        type="radio" 
+                        name="careType" 
+                        value={t} 
+                        className="peer sr-only" 
+                        checked={bookingDetails.serviceType === t}
+                        onChange={(e) => setBookingDetails(prev => ({ ...prev, serviceType: e.target.value }))}
+                      />
                       <div className="flex flex-col">
-                        <span className="font-semibold text-slate-900 peer-checked:text-primary-700">{t}</span>
+                        <span className="font-semibold text-slate-900">{t}</span>
                         <span className="mt-1 text-sm text-slate-500">Standard rate applies</span>
                       </div>
-                      <div className="absolute inset-0 rounded-xl border-2 border-transparent peer-checked:border-primary-500 pointer-events-none" />
                     </label>
                   ))}
                 </div>
@@ -167,14 +284,25 @@ export default function BookingPage() {
                     <label className="block text-sm font-semibold text-slate-900 mb-2">Start Date</label>
                     <div className="relative">
                       <CalendarIcon className="absolute left-3 top-2.5 h-5 w-5 text-slate-400" />
-                      <input type="date" className="pl-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" />
+                      <input 
+                        type="date" 
+                        className="pl-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" 
+                        value={bookingDetails.startDate}
+                        onChange={(e) => setBookingDetails(prev => ({ ...prev, startDate: e.target.value }))}
+                      />
                     </div>
                   </div>
                   <div>
-                    <label className="block text-sm font-semibold text-slate-900 mb-2">End Date (Optional)</label>
+                    <label className="block text-sm font-semibold text-slate-900 mb-2">Days of Care</label>
                     <div className="relative">
-                      <CalendarIcon className="absolute left-3 top-2.5 h-5 w-5 text-slate-400" />
-                      <input type="date" className="pl-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" />
+                      <input 
+                        type="number" 
+                        min="1"
+                        max="30"
+                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" 
+                        value={bookingDetails.days}
+                        onChange={(e) => setBookingDetails(prev => ({ ...prev, days: parseInt(e.target.value) || 1 }))}
+                      />
                     </div>
                   </div>
                 </div>
@@ -182,11 +310,32 @@ export default function BookingPage() {
                 <div>
                   <label className="block text-sm font-semibold text-slate-900 mb-2">Daily Schedule</label>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    {["8 Hours (Day)", "12 Hours", "24 Hours (Live-in)"].map((shift) => (
-                      <label key={shift} className="relative flex cursor-pointer rounded-xl border border-slate-200 bg-white p-3 shadow-sm hover:border-primary-200 text-center justify-center">
-                        <input type="radio" name="shift" value={shift} className="peer sr-only" />
-                        <span className="text-sm font-medium text-slate-900 peer-checked:text-primary-700">{shift}</span>
-                        <div className="absolute inset-0 rounded-xl border-2 border-transparent peer-checked:border-primary-500 pointer-events-none" />
+                    {[
+                      { label: "8 Hours (Day)", hours: 8, slot: "08:00 AM - 04:00 PM" },
+                      { label: "12 Hours", hours: 12, slot: "08:00 AM - 08:00 PM" },
+                      { label: "24 Hours (Live-in)", hours: 24, slot: "08:00 AM - 08:00 AM" }
+                    ].map((shift) => (
+                      <label 
+                        key={shift.label} 
+                        className={`relative flex cursor-pointer rounded-xl border p-3 shadow-sm transition-all text-center justify-center ${
+                          bookingDetails.hoursPerDay === shift.hours 
+                            ? "border-primary-500 bg-primary-50/10 text-primary-700 font-semibold" 
+                            : "border-slate-200 bg-white hover:border-primary-200 text-slate-900"
+                        }`}
+                      >
+                        <input 
+                          type="radio" 
+                          name="shift" 
+                          value={shift.hours} 
+                          className="peer sr-only" 
+                          checked={bookingDetails.hoursPerDay === shift.hours}
+                          onChange={() => setBookingDetails(prev => ({ 
+                            ...prev, 
+                            hoursPerDay: shift.hours,
+                            timeSlot: shift.slot
+                          }))}
+                        />
+                        <span className="text-sm font-medium">{shift.label}</span>
                       </label>
                     ))}
                   </div>
@@ -196,7 +345,7 @@ export default function BookingPage() {
 
             {step === 3 && (
               <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
-                <h2 className="text-xl font-bold text-slate-900 mb-4">Booking Summary</h2>
+                <h2 className="text-xl font-bold text-slate-900 mb-4">Booking Summary & Confirm</h2>
                 
                 <div className="bg-slate-50 rounded-xl p-6 border border-slate-100">
                   <div className="flex items-center gap-4 border-b border-slate-200 pb-4 mb-4">
@@ -217,6 +366,10 @@ export default function BookingPage() {
                       <span className="font-medium text-slate-900">{bookingDetails.hoursPerDay} Hours / Day ({bookingDetails.startDate})</span>
                     </div>
                     <div className="flex justify-between">
+                      <span className="text-slate-500">Duration</span>
+                      <span className="font-medium text-slate-900">{bookingDetails.days} Days</span>
+                    </div>
+                    <div className="flex justify-between">
                       <span className="text-slate-500">Rate</span>
                       <span className="font-medium text-slate-900">₪{caregiver.hourlyRate} / hr</span>
                     </div>
@@ -230,44 +383,18 @@ export default function BookingPage() {
                     <p className="text-xs text-slate-500 mt-1 text-right">Includes all taxes and fees</p>
                   </div>
                 </div>
-              </div>
-            )}
-
-            {step === 4 && (
-              <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
-                <div className="text-center mb-6">
-                  <h2 className="text-xl font-bold text-slate-900">Secure Payment</h2>
-                  <p className="text-sm text-slate-500 mt-1">To confirm your booking, a deposit of ₪150 is required.</p>
-                </div>
-                
-                <div className="space-y-3">
-                  <label className="relative flex cursor-pointer rounded-xl border border-slate-200 bg-white p-4 shadow-sm hover:border-primary-200 focus:outline-none items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <input type="radio" name="payment" value="upi" className="w-4 h-4 text-primary-600 border-slate-300 focus:ring-primary-500" defaultChecked />
-                      <span className="font-semibold text-slate-900">UPI (GPay, PhonePe, Paytm)</span>
-                    </div>
-                    <div className="bg-slate-100 px-2 py-1 rounded text-xs font-bold text-slate-600">POPULAR</div>
-                  </label>
-                  
-                  <label className="relative flex cursor-pointer rounded-xl border border-slate-200 bg-white p-4 shadow-sm hover:border-primary-200 focus:outline-none items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <input type="radio" name="payment" value="card" className="w-4 h-4 text-primary-600 border-slate-300 focus:ring-primary-500" />
-                      <span className="font-semibold text-slate-900">Credit / Debit Card</span>
-                    </div>
-                  </label>
-                </div>
 
                 <div className="bg-blue-50 border border-blue-100 rounded-lg p-4 flex gap-3 text-sm text-blue-800">
                   <ShieldCheck className="w-5 h-5 shrink-0" />
-                  <p>Your payment is held securely in escrow and only released to the caregiver after the service begins.</p>
+                  <p>Your booking is secure and covered by CareBridge Guarantee. Payment terms will be processed directly with the caregiver.</p>
                 </div>
               </div>
             )}
 
             {/* Actions */}
             <div className="mt-8 pt-6 border-t border-slate-100 flex justify-end gap-3">
-              <Button size="lg" className="w-full sm:w-auto" onClick={handleNext}>
-                {step === totalSteps ? "Pay & Confirm Booking" : "Continue"}
+              <Button size="lg" className="w-full sm:w-auto" onClick={handleNext} disabled={loading}>
+                {loading ? "Processing..." : step === totalSteps ? "Confirm Booking" : "Continue"}
               </Button>
             </div>
 

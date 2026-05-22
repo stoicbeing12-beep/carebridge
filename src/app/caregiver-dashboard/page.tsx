@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
   Calendar,
@@ -26,60 +26,140 @@ interface Booking {
   clientName?: string;
   clientId?: string;
   serviceType?: string;
-  status: "pending" | "accepted" | "rejected";
+  status: "pending" | "accepted" | "rejected" | "completed";
   totalAmount?: number;
   hours?: number;
   startDate?: string;
   timeSlot?: string;
-  createdAt?: any;
+  createdAt?: { seconds: number; nanoseconds: number } | null;
   location?: string;
+  caregiverId?: string;
+  userId?: string;
+  declineReason?: string;
 }
 
 export default function CaregiverDashboardPage() {
-  const { user, userData, loading, refreshUserData } = useAuth();
+  const { user, userData, loading, refreshUserData, isDemoMode } = useAuth();
   const router = useRouter();
   const [activeTab, setActiveTab] = useState("schedule");
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [bookingsLoading, setBookingsLoading] = useState(true);
-  const [earnings, setEarnings] = useState({ total: 0, pending: 0, hours: 0 });
+
+  // Recalculate earnings whenever bookings changes, ensuring high reactive fidelity in demo mode
+  const earnings = useMemo(() => {
+    const total = bookings.filter(b => b.status === "accepted" || b.status === "completed").reduce((sum, b) => sum + (b.totalAmount || 0), 0);
+    const pending = bookings.filter(b => b.status === "pending").reduce((s, b) => s + (b.totalAmount || 0), 0);
+    const hours = bookings.filter(b => b.status === "accepted" || b.status === "completed").reduce((h, b) => h + (b.hours || 0), 0);
+    return { total, pending, hours };
+  }, [bookings]);
+
+  const pendingCount = useMemo(() => {
+    return bookings.filter(b => b.status === "pending").length;
+  }, [bookings]);
 
   // Fetch bookings for caregiver
-  const fetchBookings = async () => {
+  const fetchBookings = useCallback(async () => {
+    if (!user) return;
     setBookingsLoading(true);
     try {
       const q = query(
         collection(db, "bookings"),
-        where("caregiverId", "==", user!.uid),
+        where("caregiverId", "==", user.uid),
         orderBy("createdAt", "desc")
       );
       const snap = await getDocs(q);
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() } as Booking));
-      setBookings(data);
-      // Simple earnings calculations
-      const total = data.reduce((sum, b) => sum + (b.totalAmount || 0), 0);
-      const pending = data.filter(b => b.status === "pending").reduce((s, b) => s + (b.totalAmount || 0), 0);
-      const hours = data.reduce((h, b) => h + (b.hours || 0), 0);
-      setEarnings({ total, pending, hours });
+      
+      // Also combine with any local bookings from localStorage
+      const localBookingsRaw = localStorage.getItem("carebridge_bookings");
+      const localBookings = localBookingsRaw ? JSON.parse(localBookingsRaw) : [];
+      const filteredLocal = localBookings.filter((b: Booking) => b.caregiverId === user.uid);
+      
+      // Deduplicate local bookings that are already in Firestore by matching attributes
+      const filteredLocalNoDuplicates = filteredLocal.filter((lb: Booking) => {
+        const isInFirestore = data.some((db: Booking) => 
+          db.caregiverId === lb.caregiverId &&
+          db.userId === lb.userId &&
+          db.startDate === lb.startDate &&
+          db.timeSlot === lb.timeSlot
+        );
+        return !isInFirestore;
+      });
+
+      const combined = [...filteredLocalNoDuplicates, ...data];
+      const unique = combined.filter((v, i, a) => a.findIndex(t => t.id === v.id) === i);
+      setBookings(unique);
     } catch (err) {
-      console.error("Failed to fetch bookings", err);
+      console.warn("Caregiver dashboard: fetchBookings failed or empty:", err);
+      // Clean slate - load local storage only
+      const localBookingsRaw = localStorage.getItem("carebridge_bookings");
+      const localBookings = localBookingsRaw ? JSON.parse(localBookingsRaw) : [];
+      const filteredLocal = localBookings.filter((b: Booking) => b.caregiverId === user.uid);
+      setBookings(filteredLocal);
     } finally {
       setBookingsLoading(false);
     }
-  };
+  }, [user]);
+
+  // Real-time synchronization when storage changes in another tab
+  useEffect(() => {
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === "carebridge_bookings") {
+        fetchBookings();
+      }
+    };
+    window.addEventListener("storage", handleStorageChange);
+    return () => window.removeEventListener("storage", handleStorageChange);
+  }, [fetchBookings]);
 
   // Update booking status (accept/reject)
-  const handleStatusChange = async (bookingId: string, newStatus: Booking["status"]) => {
+  const handleStatusChange = async (bookingId: string, newStatus: Booking["status"], declineReason?: string) => {
+    // Proactively update localStorage bookings so it's persistent across both dashboards
     try {
+      const localBookingsRaw = localStorage.getItem("carebridge_bookings");
+      if (localBookingsRaw) {
+        const localBookings = JSON.parse(localBookingsRaw);
+        const updatedLocal = localBookings.map((b: Booking) => 
+          b.id === bookingId ? { ...b, status: newStatus, declineReason: declineReason || b.declineReason } : b
+        );
+        localStorage.setItem("carebridge_bookings", JSON.stringify(updatedLocal));
+      }
+    } catch (e) {
+      console.warn("localStorage status update failed:", e);
+    }
+
+    try {
+      if (isDemoMode || bookingId.startsWith("b-local-")) {
+        // Dynamic state update for high-fidelity interactive simulation
+        setBookings(prev =>
+          prev.map(b => (b.id === bookingId ? { ...b, status: newStatus, declineReason: declineReason || b.declineReason } : b))
+        );
+        return;
+      }
       const bookingRef = doc(db, "bookings", bookingId);
-      await updateDoc(bookingRef, { status: newStatus });
+      await updateDoc(bookingRef, { 
+        status: newStatus,
+        ...(declineReason ? { declineReason } : {})
+      });
       setBookings(prev =>
-        prev.map(b => (b.id === bookingId ? { ...b, status: newStatus } : b))
+        prev.map(b => (b.id === bookingId ? { ...b, status: newStatus, declineReason: declineReason || b.declineReason } : b))
       );
       // Refresh to update earnings stats
       fetchBookings();
     } catch (err) {
       console.error("Failed to update booking status", err);
+      // Fallback update in case of Firestore error
+      setBookings(prev =>
+        prev.map(b => (b.id === bookingId ? { ...b, status: newStatus, declineReason: declineReason || b.declineReason } : b))
+      );
     }
+  };
+
+  const handleDeclineWithReason = async (bookingId: string) => {
+    const reason = prompt("Please enter the reason for declining this request:");
+    if (reason === null) return;
+    const declineReason = reason.trim() || "Caregiver unavailable at this time.";
+    await handleStatusChange(bookingId, "rejected", declineReason);
   };
 
   useEffect(() => {
@@ -94,10 +174,13 @@ export default function CaregiverDashboardPage() {
       } else if (userData?.role === "caregiver" && !userData?.onboardingComplete) {
         router.push("/onboarding");
       } else if (userData?.role === "caregiver") {
-        fetchBookings();
+        const timer = setTimeout(() => {
+          fetchBookings();
+        }, 0);
+        return () => clearTimeout(timer);
       }
     }
-  }, [user, userData, loading, router]);
+  }, [user, userData, loading, router, isDemoMode, fetchBookings]);
 
   if (loading || (user && !userData)) {
     return (
@@ -137,20 +220,34 @@ export default function CaregiverDashboardPage() {
               </div>
               
               <nav className="space-y-1">
-                {tabs.map((tab) => (
-                  <button
-                    key={tab.id}
-                    onClick={() => setActiveTab(tab.id)}
-                    className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm font-medium rounded-lg transition-colors ${
-                      activeTab === tab.id 
-                        ? "bg-primary-50 text-primary-600" 
-                        : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-                    }`}
-                  >
-                    <tab.icon className="w-4 h-4" />
-                    {tab.label}
-                  </button>
-                ))}
+                {tabs.map((tab) => {
+                  const isPendingBookingsTab = tab.id === "bookings" && pendingCount > 0;
+                  const isActive = activeTab === tab.id;
+                  
+                  return (
+                    <button
+                      key={tab.id}
+                      onClick={() => setActiveTab(tab.id)}
+                      className={`w-full flex items-center justify-between px-4 py-2.5 text-sm font-medium rounded-lg transition-all ${
+                        isActive
+                          ? "bg-primary-50 text-primary-600 border-l-4 border-primary-500 pl-3"
+                          : isPendingBookingsTab
+                            ? "bg-amber-50/80 text-amber-700 hover:bg-amber-100/90 border border-amber-200 shadow-sm animate-pulse"
+                            : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <tab.icon className={`w-4 h-4 ${isActive ? "text-primary-600" : isPendingBookingsTab ? "text-amber-600" : "text-slate-500"}`} />
+                        <span className={isPendingBookingsTab ? "font-bold" : ""}>{tab.label}</span>
+                      </div>
+                      {tab.id === "bookings" && pendingCount > 0 && (
+                        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white animate-pulse">
+                          {pendingCount}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </nav>
             </div>
 
@@ -175,7 +272,7 @@ export default function CaregiverDashboardPage() {
             {activeTab === "schedule" && (
               <div className="space-y-6 animate-in fade-in duration-500">
                 <div className="flex justify-between items-center">
-                  <h1 className="text-2xl font-bold text-slate-900">Today's Shifts</h1>
+                  <h1 className="text-2xl font-bold text-slate-900">Today&apos;s Shifts</h1>
                   <Button variant="outline" size="sm" className="gap-2">
                     <PlusCircle className="w-4 h-4" /> Add Availability
                   </Button>
@@ -189,7 +286,7 @@ export default function CaregiverDashboardPage() {
                       <Calendar className="w-12 h-12 text-slate-300 mx-auto mb-4" />
                       <h3 className="font-bold text-slate-900">No scheduled shifts</h3>
                       <p className="text-slate-500 max-w-xs mx-auto mt-2">
-                        You don't have any accepted bookings scheduled yet. Check your "Bookings" tab to accept new requests.
+                        You don&apos;t have any accepted bookings scheduled yet. Check your &quot;Bookings&quot; tab to accept new requests.
                       </p>
                     </CardContent>
                   </Card>
@@ -300,7 +397,7 @@ export default function CaregiverDashboardPage() {
                                 <Button size="sm" className="bg-primary-600 hover:bg-primary-700" onClick={() => handleStatusChange(b.id, "accepted")}>
                                   Accept Request
                                 </Button>
-                                <Button variant="outline" size="sm" className="text-red-600 hover:text-red-700 hover:bg-red-50 border-red-100" onClick={() => handleStatusChange(b.id, "rejected")}>
+                                <Button variant="outline" size="sm" className="text-red-600 hover:text-red-700 hover:bg-red-50 border-red-100" onClick={() => handleDeclineWithReason(b.id)}>
                                   Decline
                                 </Button>
                               </>
@@ -472,7 +569,7 @@ export default function CaregiverDashboardPage() {
                             <label className="text-sm font-medium text-slate-700">Location</label>
                             <input 
                               name="location"
-                              defaultValue={(userData as any).location}
+                              defaultValue={userData?.location || ""}
                               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:ring-primary-500 focus:border-primary-500" 
                             />
                           </div>
@@ -481,7 +578,7 @@ export default function CaregiverDashboardPage() {
                             <input 
                               name="phone"
                               type="tel"
-                              defaultValue={(userData as any).phone}
+                              defaultValue={userData?.phone || ""}
                               placeholder="+91 98765 43210"
                               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:ring-primary-500 focus:border-primary-500" 
                             />
@@ -494,7 +591,7 @@ export default function CaregiverDashboardPage() {
                             <input 
                               name="hourlyRate"
                               type="number"
-                              defaultValue={(userData as any).hourlyRate}
+                              defaultValue={userData?.hourlyRate || ""}
                               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:ring-primary-500 focus:border-primary-500" 
                             />
                           </div>
@@ -502,7 +599,7 @@ export default function CaregiverDashboardPage() {
                             <label className="text-sm font-medium text-slate-700">Visa Status</label>
                             <select 
                               name="visaStatus"
-                              defaultValue={(userData as any).visaStatus}
+                              defaultValue={userData?.visaStatus || "Israeli Citizen"}
                               className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:ring-primary-500 focus:border-primary-500 bg-white"
                             >
                               <option value="Israeli Citizen">Israeli Citizen</option>
@@ -518,7 +615,7 @@ export default function CaregiverDashboardPage() {
                           <input 
                             name="experienceYears"
                             type="number"
-                            defaultValue={(userData as any).experienceYears}
+                            defaultValue={userData?.experienceYears || ""}
                             className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:ring-primary-500 focus:border-primary-500" 
                           />
                         </div>
@@ -528,7 +625,7 @@ export default function CaregiverDashboardPage() {
                           <textarea 
                             name="certifications"
                             rows={4}
-                            defaultValue={(userData as any).certifications}
+                            defaultValue={Array.isArray(userData?.certifications) ? userData.certifications.join(", ") : (userData?.certifications || "")}
                             className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:ring-primary-500 focus:border-primary-500" 
                           />
                         </div>

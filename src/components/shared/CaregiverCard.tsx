@@ -1,13 +1,13 @@
 import Link from "next/link"
-import { User, MapPin, Star, ShieldCheck, Heart, Award } from "lucide-react"
+import { User, MapPin, Star, ShieldCheck } from "lucide-react"
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { type Caregiver } from "@/types"
 
 export function CaregiverCard({ caregiver }: { caregiver: Caregiver }) {
-  const ensureArray = (val: any) => {
-    if (Array.isArray(val)) return val;
+  const ensureArray = (val: unknown): string[] => {
+    if (Array.isArray(val)) return val as string[];
     if (typeof val === "string") return val.split(",").map(s => s.trim()).filter(Boolean);
     return [];
   };

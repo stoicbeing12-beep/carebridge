@@ -1,22 +1,59 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { Calendar, Clock, MapPin, MessageCircle, AlertTriangle, FileText, Settings, CreditCard, ShieldAlert } from "lucide-react"
+import { Calendar, Clock, MapPin, MessageCircle, AlertTriangle, FileText, Settings, CreditCard, ShieldAlert, Star } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { useAuth } from "@/context/AuthContext"
-import { collection, query, where, getDocs, orderBy } from "firebase/firestore"
+import { collection, query, where, getDocs, orderBy, doc, updateDoc, addDoc } from "firebase/firestore"
 import { db } from "@/lib/firebase"
+
+interface Booking {
+  id: string;
+  caregiverId?: string;
+  caregiverName?: string;
+  userId?: string;
+  clientName?: string;
+  status: "pending" | "accepted" | "rejected" | "completed";
+  totalAmount?: number;
+  hours?: number;
+  startDate?: string;
+  timeSlot?: string;
+  serviceType?: string;
+  declineReason?: string;
+  rating?: number;
+  feedbackText?: string;
+}
+
+interface CareLog {
+  id: string;
+  caregiverName?: string;
+  submittedAt?: string;
+  vitals?: string;
+  meals?: string;
+  activities?: string;
+  notes?: string;
+  createdAt?: unknown;
+}
 
 export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState("upcoming")
-  const [careLogs, setCareLogs] = useState<any[]>([])
-  const [bookings, setBookings] = useState<any[]>([])
+  const [careLogs, setCareLogs] = useState<CareLog[]>([])
+  const [bookings, setBookings] = useState<Booking[]>([])
   const { user, userData, loading } = useAuth()
   const router = useRouter()
+
+  // Preserved state variables for editing and feedback modals
+  const [editingBooking, setEditingBooking] = useState<Booking | null>(null);
+  const [editStartDate, setEditStartDate] = useState("");
+  const [editTimeSlot, setEditTimeSlot] = useState("08:00 AM - 08:00 PM");
+  const [feedbackBooking, setFeedbackBooking] = useState<Booking | null>(null);
+  const [rating, setRating] = useState(5);
+  const [feedbackText, setFeedbackText] = useState("");
+  const [feedbackLoading, setFeedbackLoading] = useState(false);
 
   useEffect(() => {
     if (!loading) {
@@ -36,7 +73,7 @@ export default function DashboardPage() {
       try {
         const q = query(collection(db, "careLogs"), orderBy("createdAt", "desc"));
         const snap = await getDocs(q);
-        const list = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const list = snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as CareLog));
         setCareLogs(list);
       } catch (err) {
         console.error("Error fetching care logs:", err);
@@ -45,24 +82,210 @@ export default function DashboardPage() {
     if (user) fetchCareLogs();
   }, [user]);
 
-  useEffect(() => {
-    const fetchBookings = async () => {
-      if (!user) return;
-      try {
-        const q = query(
-          collection(db, "bookings"), 
-          where("userId", "==", user.uid),
-          orderBy("createdAt", "desc")
+  // Fetch bookings with content-based deduplication
+  const fetchBookings = useCallback(async () => {
+    if (!user) return;
+    try {
+      const q = query(
+        collection(db, "bookings"), 
+        where("userId", "==", user.uid),
+        orderBy("createdAt", "desc")
+      );
+      const snap = await getDocs(q);
+      const list = snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Booking));
+      
+      // Also combine with any local bookings from localStorage
+      const localBookingsRaw = localStorage.getItem("carebridge_bookings");
+      const localBookings = localBookingsRaw ? JSON.parse(localBookingsRaw) : [];
+      const filteredLocal = localBookings.filter((b: Booking) => b.userId === user.uid);
+      
+      // Deduplicate local bookings that are already in Firestore by matching attributes
+      const filteredLocalNoDuplicates = filteredLocal.filter((lb: Booking) => {
+        const isInFirestore = list.some((db: Booking) => 
+          db.caregiverId === lb.caregiverId &&
+          db.userId === lb.userId &&
+          db.startDate === lb.startDate &&
+          db.timeSlot === lb.timeSlot
         );
-        const snap = await getDocs(q);
-        const list = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        setBookings(list);
-      } catch (err) {
-        console.error("Error fetching bookings:", err);
+        return !isInFirestore;
+      });
+
+      const combined = [...filteredLocalNoDuplicates, ...list];
+      const unique = combined.filter((v, i, a) => a.findIndex(t => t.id === v.id) === i);
+      setBookings(unique);
+    } catch (err) {
+      console.warn("Family dashboard: fetchBookings failed or empty:", err);
+      // Clean slate - load local storage only
+      const localBookingsRaw = localStorage.getItem("carebridge_bookings");
+      const localBookings = localBookingsRaw ? JSON.parse(localBookingsRaw) : [];
+      const filteredLocal = localBookings.filter((b: Booking) => b.userId === user.uid);
+      setBookings(filteredLocal);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (user) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      fetchBookings();
+    }
+  }, [user, fetchBookings]);
+
+  // Reactive dashboard state sync via storage event listener
+  useEffect(() => {
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === "carebridge_bookings") {
+        fetchBookings();
       }
     };
-    if (user) fetchBookings();
-  }, [user]);
+    window.addEventListener("storage", handleStorageChange);
+    return () => window.removeEventListener("storage", handleStorageChange);
+  }, [fetchBookings]);
+
+  const handleUpdateBooking = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingBooking) return;
+
+    // Prevent double booking for the same timing
+    const hasCollision = bookings.some((b: Booking) => 
+      b.id !== editingBooking.id &&
+      b.caregiverId === editingBooking.caregiverId &&
+      b.startDate === editStartDate &&
+      b.timeSlot === editTimeSlot &&
+      (b.status === "accepted" || b.status === "pending")
+    );
+
+    if (hasCollision) {
+      alert("This caregiver is already scheduled for this timing. Please choose a different date or time slot.");
+      return;
+    }
+
+    try {
+      const localBookingsRaw = localStorage.getItem("carebridge_bookings");
+      if (localBookingsRaw) {
+        const localBookings = JSON.parse(localBookingsRaw);
+        const updatedLocal = localBookings.map((b: Booking) => 
+          b.id === editingBooking.id 
+            ? { ...b, startDate: editStartDate, timeSlot: editTimeSlot } 
+            : b
+        );
+        localStorage.setItem("carebridge_bookings", JSON.stringify(updatedLocal));
+        window.dispatchEvent(new Event("storage"));
+      }
+    } catch (err) {
+      console.warn("localStorage schedule update failed:", err);
+    }
+
+    try {
+      if (editingBooking.id.startsWith("b-local-")) {
+        setBookings(prev => 
+          prev.map(b => 
+            b.id === editingBooking.id 
+              ? { ...b, startDate: editStartDate, timeSlot: editTimeSlot } 
+              : b
+          )
+        );
+        setEditingBooking(null);
+        return;
+      }
+
+      const bookingRef = doc(db, "bookings", editingBooking.id);
+      await updateDoc(bookingRef, {
+        startDate: editStartDate,
+        timeSlot: editTimeSlot
+      });
+
+      setBookings(prev => 
+        prev.map(b => 
+          b.id === editingBooking.id 
+            ? { ...b, startDate: editStartDate, timeSlot: editTimeSlot } 
+            : b
+        )
+      );
+      setEditingBooking(null);
+      fetchBookings();
+    } catch (err) {
+      console.error("Failed to update booking date/time:", err);
+      setBookings(prev => 
+        prev.map(b => 
+          b.id === editingBooking.id 
+            ? { ...b, startDate: editStartDate, timeSlot: editTimeSlot } 
+            : b
+        )
+      );
+      setEditingBooking(null);
+    }
+  };
+
+  const handleCompleteAndSubmitFeedback = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!feedbackBooking || !user || !userData) return;
+    setFeedbackLoading(true);
+
+    try {
+      const localBookingsRaw = localStorage.getItem("carebridge_bookings");
+      if (localBookingsRaw) {
+        const localBookings = JSON.parse(localBookingsRaw);
+        const updatedLocal = localBookings.map((b: Booking) => 
+          b.id === feedbackBooking.id 
+            ? { ...b, status: "completed", rating, feedbackText } 
+            : b
+        );
+        localStorage.setItem("carebridge_bookings", JSON.stringify(updatedLocal));
+        window.dispatchEvent(new Event("storage"));
+      }
+    } catch (err) {
+      console.warn("localStorage complete & feedback update failed:", err);
+    }
+
+    try {
+      const reviewPayload = {
+        caregiverId: feedbackBooking.caregiverId,
+        author: user.displayName || userData.name || "Family Member",
+        date: new Date().toLocaleDateString("en-US", { month: "short", year: "numeric" }),
+        rating: rating,
+        text: feedbackText,
+        createdAt: new Date()
+      };
+
+      if (!feedbackBooking.id.startsWith("b-local-")) {
+        await addDoc(collection(db, "reviews"), reviewPayload);
+        
+        const bookingRef = doc(db, "bookings", feedbackBooking.id);
+        await updateDoc(bookingRef, {
+          status: "completed",
+          rating: rating,
+          feedbackText: feedbackText
+        });
+      }
+
+      setBookings(prev => 
+        prev.map(b => 
+          b.id === feedbackBooking.id 
+            ? { ...b, status: "completed", rating, feedbackText } 
+            : b
+        )
+      );
+      
+      setFeedbackBooking(null);
+      setRating(5);
+      setFeedbackText("");
+      fetchBookings();
+    } catch (err) {
+      console.error("Failed to complete booking and submit feedback:", err);
+      setBookings(prev => 
+        prev.map(b => 
+          b.id === feedbackBooking.id 
+            ? { ...b, status: "completed", rating, feedbackText } 
+            : b
+        )
+      );
+      setFeedbackBooking(null);
+      setRating(5);
+      setFeedbackText("");
+    } finally {
+      setFeedbackLoading(false);
+    }
+  };
 
   const upcomingBookings = bookings.filter(b => b.status === "accepted" || b.status === "pending");
   const pastBookings = bookings.filter(b => b.status === "completed" || b.status === "rejected");
@@ -125,7 +348,7 @@ export default function DashboardPage() {
               <div className="flex items-center gap-2 font-bold text-red-700 mb-2">
                 <ShieldAlert className="w-5 h-5" /> Emergency
               </div>
-              <p className="text-sm text-red-600 mb-4">Caregiver canceled or didn't show up? Request an immediate replacement.</p>
+              <p className="text-sm text-red-600 mb-4">Caregiver canceled or didn&apos;t show up? Request an immediate replacement.</p>
               <Button variant="outline" className="w-full border-red-200 text-red-700 hover:bg-red-100 hover:text-red-800 bg-white">
                 Request Backup Care
               </Button>
@@ -198,9 +421,36 @@ export default function DashboardPage() {
                               </div>
                             </div>
                           </div>
-                          <Button variant="outline" size="sm" className="gap-2">
-                            <MessageCircle className="w-4 h-4" /> Message
-                          </Button>
+                          <div className="flex gap-2">
+                            <Button variant="outline" size="sm" className="gap-2">
+                              <MessageCircle className="w-4 h-4" /> Message
+                            </Button>
+                            {b.status === "pending" && (
+                              <Button 
+                                variant="outline" 
+                                size="sm" 
+                                className="border-amber-200 text-amber-700 hover:bg-amber-50"
+                                onClick={() => {
+                                  setEditingBooking(b);
+                                  setEditStartDate(b.startDate || "");
+                                  setEditTimeSlot(b.timeSlot || "08:00 AM - 08:00 PM");
+                                }}
+                              >
+                                Edit Schedule
+                              </Button>
+                            )}
+                            {b.status === "accepted" && (
+                              <Button 
+                                size="sm" 
+                                className="bg-primary-600 hover:bg-primary-700 text-white"
+                                onClick={() => {
+                                  setFeedbackBooking(b);
+                                }}
+                              >
+                                Complete & Review
+                              </Button>
+                            )}
+                          </div>
                         </div>
                       </CardContent>
                     </Card>
@@ -282,6 +532,15 @@ export default function DashboardPage() {
                             </Button>
                           </div>
                         </div>
+                        
+                        {b.status === "rejected" && b.declineReason && (
+                          <div className="mt-4 p-3 bg-red-50/70 border border-red-100/50 rounded-lg text-sm text-red-700 flex items-start gap-2 animate-in fade-in duration-200">
+                            <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                            <div>
+                              <span className="font-semibold">Reason for declining:</span> {b.declineReason}
+                            </div>
+                          </div>
+                        )}
                       </CardContent>
                     </Card>
                   ))
@@ -296,6 +555,146 @@ export default function DashboardPage() {
           </main>
         </div>
       </div>
+
+      {/* Edit Schedule Modal Overlay */}
+      {editingBooking && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-2xl max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="bg-amber-50/50 px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+              <h3 className="font-bold text-slate-900 flex items-center gap-2">
+                <Calendar className="w-5 h-5 text-amber-500" /> Edit Booking Schedule
+              </h3>
+              <button 
+                onClick={() => setEditingBooking(null)}
+                className="text-slate-400 hover:text-slate-600 transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+            <form onSubmit={handleUpdateBooking} className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-1.5">Start Date</label>
+                <input 
+                  type="date"
+                  required
+                  value={editStartDate}
+                  onChange={(e) => setEditStartDate(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 transition-all bg-white"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-1.5">Time Slot</label>
+                <select
+                  value={editTimeSlot}
+                  onChange={(e) => setEditTimeSlot(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 transition-all bg-white"
+                >
+                  <option value="08:00 AM - 12:00 PM">Morning (08:00 AM - 12:00 PM)</option>
+                  <option value="12:00 PM - 04:00 PM">Afternoon (12:00 PM - 04:00 PM)</option>
+                  <option value="04:00 PM - 08:00 PM">Evening (04:00 PM - 08:00 PM)</option>
+                  <option value="08:00 AM - 08:00 PM">Full Day (08:00 AM - 08:00 PM)</option>
+                </select>
+              </div>
+              
+              <div className="pt-2 flex justify-end gap-3 border-t border-slate-100">
+                <Button 
+                  type="button" 
+                  variant="ghost" 
+                  onClick={() => setEditingBooking(null)}
+                  className="rounded-xl"
+                >
+                  Cancel
+                </Button>
+                <Button 
+                  type="submit" 
+                  className="bg-amber-600 hover:bg-amber-700 text-white rounded-xl shadow-sm px-5"
+                >
+                  Save Changes
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Leave Feedback Modal Overlay */}
+      {feedbackBooking && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-2xl max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="bg-primary-50/50 px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+              <h3 className="font-bold text-slate-900 flex items-center gap-2">
+                <Star className="w-5 h-5 text-primary-500 fill-primary-500" /> Complete Care & Feedback
+              </h3>
+              <button 
+                onClick={() => setFeedbackBooking(null)}
+                className="text-slate-400 hover:text-slate-600 transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+            <form onSubmit={handleCompleteAndSubmitFeedback} className="p-6 space-y-4">
+              <p className="text-sm text-slate-600">
+                Please rate and share your experience with <span className="font-semibold text-slate-800">{feedbackBooking.caregiverName}</span> to complete this booking.
+              </p>
+              
+              <div className="flex flex-col items-center justify-center py-4 bg-slate-50/80 rounded-2xl border border-slate-100">
+                <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Your Rating</span>
+                <div className="flex gap-2">
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <button
+                      key={star}
+                      type="button"
+                      onClick={() => setRating(star)}
+                      className="transform hover:scale-110 active:scale-95 transition-all duration-150"
+                    >
+                      <Star 
+                        className={`w-8 h-8 transition-colors ${
+                          star <= rating 
+                            ? "fill-amber-400 text-amber-400 animate-in zoom-in-75 duration-100" 
+                            : "text-slate-300 hover:text-slate-400"
+                        }`}
+                      />
+                    </button>
+                  ))}
+                </div>
+                <span className="text-sm font-bold text-slate-700 mt-2">
+                  {rating === 5 ? "Excellent!" : rating === 4 ? "Very Good" : rating === 3 ? "Good" : rating === 2 ? "Fair" : "Poor"}
+                </span>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-1.5">Review Comments</label>
+                <textarea
+                  required
+                  rows={4}
+                  value={feedbackText}
+                  onChange={(e) => setFeedbackText(e.target.value)}
+                  placeholder="Describe your care experience in detail..."
+                  className="w-full rounded-xl border border-slate-200 px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-500 transition-all bg-white"
+                />
+              </div>
+              
+              <div className="pt-2 flex justify-end gap-3 border-t border-slate-100">
+                <Button 
+                  type="button" 
+                  variant="ghost" 
+                  onClick={() => setFeedbackBooking(null)}
+                  className="rounded-xl"
+                >
+                  Cancel
+                </Button>
+                <Button 
+                  type="submit" 
+                  disabled={feedbackLoading}
+                  className="bg-primary-600 hover:bg-primary-700 text-white rounded-xl shadow-sm px-5"
+                >
+                  {feedbackLoading ? "Submitting..." : "Complete Booking"}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

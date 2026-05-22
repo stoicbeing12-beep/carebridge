@@ -1,6 +1,6 @@
 "use client"
 
-import { Phone, Mail, MessageSquare, Plus, Minus, AlertTriangle } from "lucide-react"
+import { Phone, Mail, Plus, Minus, AlertTriangle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent } from "@/components/ui/card"
@@ -128,7 +128,7 @@ export default function SupportPage() {
 
             <div className="mt-8 bg-primary-50 rounded-xl p-6 text-center border border-primary-100">
               <h3 className="font-bold text-slate-900 mb-2">Still have questions?</h3>
-              <p className="text-slate-600 mb-4">Can't find the answer you're looking for? Please chat to our friendly team.</p>
+              <p className="text-slate-600 mb-4">Can&apos;t find the answer you&apos;re looking for? Please chat to our friendly team.</p>
               <Button variant="outline" className="bg-white">Chat with us</Button>
             </div>
           </div>
