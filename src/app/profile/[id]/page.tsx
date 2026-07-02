@@ -19,19 +19,19 @@ export default function CaregiverProfile({ params }: { params: Promise<{ id: str
   useEffect(() => {
     const fetchCaregiverAndReviews = async () => {
       const { id } = await params;
-      
+
       // Fetch Caregiver
       const docRef = doc(db, "users", id);
       const snap = await getDoc(docRef);
       if (snap.exists()) {
-        setCaregiver({ id: snap.id, ...snap.data() });
+        setCaregiver({ ...(snap.data() as Caregiver), id: snap.id });
       }
 
       // Fetch Reviews
       const reviewsQuery = query(collection(db, "reviews"), where("caregiverId", "==", id));
       const reviewsSnap = await getDocs(reviewsQuery);
       const reviewsList = reviewsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setReviews(reviewsList.length > 0 ? reviewsList : mockReviews.slice(0, 2));
+      setReviews(Array.isArray(reviewsList) ? reviewsList : []);
 
       setLoading(false);
     };
@@ -55,7 +55,7 @@ export default function CaregiverProfile({ params }: { params: Promise<{ id: str
   return (
     <div className="bg-slate-50 min-h-screen py-8">
       <div className="container mx-auto px-4 sm:px-6 lg:px-8 max-w-5xl">
-        
+
         {/* Profile Header */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden mb-8">
           <div className="h-32 bg-primary-100 w-full" />
@@ -63,9 +63,9 @@ export default function CaregiverProfile({ params }: { params: Promise<{ id: str
             <div className="flex flex-col sm:flex-row gap-6 sm:items-end -mt-16 mb-6">
               <div className="relative w-32 h-32 rounded-2xl overflow-hidden border-4 border-white shadow-md bg-slate-100 flex items-center justify-center shrink-0">
                 {caregiver.photo ? (
-                  <img 
-                    src={caregiver.photo} 
-                    alt={caregiver.name} 
+                  <img
+                    src={caregiver.photo}
+                    alt={caregiver.name}
                     className="w-full h-full object-cover"
                   />
                 ) : (
@@ -97,7 +97,7 @@ export default function CaregiverProfile({ params }: { params: Promise<{ id: str
                 </div>
               </div>
             </div>
-            
+
             <div className="flex flex-wrap gap-2 mb-6">
               {ensureArray(caregiver.type).map((t: string) => (
                 <Badge key={t} variant="secondary" className="bg-primary-50 text-primary-700">{t}</Badge>
@@ -113,7 +113,7 @@ export default function CaregiverProfile({ params }: { params: Promise<{ id: str
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Main Content */}
           <div className="lg:col-span-2 space-y-8">
-            
+
             <Card>
               <CardContent className="p-6">
                 <h2 className="text-xl font-bold text-slate-900 mb-4 flex items-center gap-2">
@@ -153,7 +153,7 @@ export default function CaregiverProfile({ params }: { params: Promise<{ id: str
               <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
                 <Star className="w-5 h-5 text-primary-500" /> Reviews ({caregiver.reviews})
               </h2>
-              {reviews.map(review => (
+              {Array.isArray(reviews) && reviews.map(review => (
                 <div key={review.id} className="bg-white p-6 rounded-xl border border-slate-200">
                   <div className="flex justify-between items-start mb-4">
                     <div className="flex items-center gap-3">
@@ -166,15 +166,16 @@ export default function CaregiverProfile({ params }: { params: Promise<{ id: str
                       </div>
                     </div>
                     <div className="flex text-amber-400">
-                      {[...Array(review.rating)].map((_, i) => <Star key={i} className="w-4 h-4 fill-current" />)}
-                    </div>
+                      {[...Array(Number(review.rating) || 0)].map((_, i) => (
+                        <Star key={i} className="w-4 h-4 fill-current" />
+                      ))}                    </div>
                   </div>
                   <p className="text-slate-600">{review.text}</p>
                 </div>
               ))}
               <Button variant="outline" className="w-full">Load More Reviews</Button>
             </div>
-            
+
           </div>
 
           {/* Sidebar */}
