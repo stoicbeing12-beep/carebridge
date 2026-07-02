@@ -30,23 +30,6 @@ export default function CaregiverProfile({ params }: { params: Promise<{ id: str
   useEffect(() => {
     const fetchCaregiverAndReviews = async () => {
       const { id } = await params;
-<<<<<<< HEAD
-
-      // Fetch Caregiver
-      const docRef = doc(db, "users", id);
-      const snap = await getDoc(docRef);
-      if (snap.exists()) {
-        setCaregiver({ ...(snap.data() as Caregiver), id: snap.id });
-      }
-
-      // Fetch Reviews
-      const reviewsQuery = query(collection(db, "reviews"), where("caregiverId", "==", id));
-      const reviewsSnap = await getDocs(reviewsQuery);
-      const reviewsList = reviewsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setReviews(Array.isArray(reviewsList) ? reviewsList : []);
-
-      setLoading(false);
-=======
       let fetchedCaregiver: Caregiver | null = null;
       let fetchedReviews: Review[] = [];
       
@@ -121,7 +104,6 @@ export default function CaregiverProfile({ params }: { params: Promise<{ id: str
 
         setLoading(false);
       }
->>>>>>> 6186fde8f90523c8470bb9e3f21f5dbf43b97bf8
     };
     fetchCaregiverAndReviews();
   }, [params, isDemoMode]);
@@ -254,14 +236,8 @@ export default function CaregiverProfile({ params }: { params: Promise<{ id: str
                       </div>
                     </div>
                     <div className="flex text-amber-400">
-<<<<<<< HEAD
-                      {[...Array(Number(review.rating) || 0)].map((_, i) => (
-                        <Star key={i} className="w-4 h-4 fill-current" />
-                      ))}                    </div>
-=======
                       {[...Array(Math.max(0, Math.min(5, Math.floor(Number(review.rating) || 5))))].map((_, i) => <Star key={i} className="w-4 h-4 fill-current" />)}
                     </div>
->>>>>>> 6186fde8f90523c8470bb9e3f21f5dbf43b97bf8
                   </div>
                   <p className="text-slate-600">{review.text}</p>
                 </div>
