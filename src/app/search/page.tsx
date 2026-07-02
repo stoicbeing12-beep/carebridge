@@ -7,6 +7,9 @@ import { CaregiverCard } from "@/components/shared/CaregiverCard"
 import { Filter, SlidersHorizontal, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { useAuth } from "@/context/AuthContext"
+import { caregivers as mockCaregivers } from "@/lib/data"
+import { type Caregiver } from "@/types"
 
 export default function SearchPage() {
   const [selectedTypes, setSelectedTypes] = useState<string[]>([])
@@ -14,27 +17,41 @@ export default function SearchPage() {
   const [selectedVisas, setSelectedVisas] = useState<string[]>([])
   const [selectedLanguages, setSelectedLanguages] = useState<string[]>([])
   const [experience, setExperience] = useState("Any Experience")
-  const [caregivers, setCaregivers] = useState<any[]>([]);
+  const [caregivers, setCaregivers] = useState<Caregiver[]>([]);
   const [sortBy, setSortBy] = useState("Recommended")
   const [isMobileFiltersOpen, setIsMobileFiltersOpen] = useState(false)
+  const { isDemoMode } = useAuth()
 
   useEffect(() => {
     const fetchCaregivers = async () => {
-      // Query users who are caregivers and have completed onboarding
-      const q = query(
-        collection(db, "users"),
-        where("role", "==", "caregiver"),
-        where("onboardingComplete", "==", true)
-      );
-      const querySnapshot = await getDocs(q);
-      const list: any[] = [];
-      querySnapshot.forEach((doc) => {
-        list.push({ id: doc.id, ...doc.data() });
-      });
-      setCaregivers(list);
+      try {
+        if (isDemoMode) {
+          throw new Error("Demo mode is active");
+        }
+        // Query users who are caregivers and have completed onboarding
+        const q = query(
+          collection(db, "users"),
+          where("role", "==", "caregiver"),
+          where("onboardingComplete", "==", true)
+        );
+        const querySnapshot = await getDocs(q);
+        const list: Caregiver[] = [];
+        querySnapshot.forEach((doc) => {
+          list.push({ id: doc.id, ...doc.data() } as unknown as Caregiver);
+        });
+        
+        if (list.length === 0) {
+          setCaregivers(mockCaregivers);
+        } else {
+          setCaregivers(list);
+        }
+      } catch (err) {
+        console.warn("Search page Firestore query failed, falling back to mock caregivers list:", err);
+        setCaregivers(mockCaregivers);
+      }
     };
     fetchCaregivers();
-  }, []);
+  }, [isDemoMode]);
 
   const handleCheckboxChange = (
     setter: React.Dispatch<React.SetStateAction<string[]>>,

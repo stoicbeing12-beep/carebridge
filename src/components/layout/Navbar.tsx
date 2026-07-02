@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
-import { Heart, Menu, X, LogOut, User as UserIcon } from "lucide-react"
+import { Menu, X, LogOut, User as UserIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useState } from "react"
 import { cn } from "@/lib/utils"
@@ -12,7 +12,7 @@ export function Navbar() {
   const pathname = usePathname()
   const router = useRouter()
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
-  const { user, userData, loading, logOut } = useAuth()
+  const { user, userData, logOut } = useAuth()
 
   const handleLogout = async () => {
     try {

@@ -10,7 +10,7 @@ import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Heart, Mail, Lock, User } from "lucide-react";
+import { Mail, Lock, User } from "lucide-react";
 
 export default function SignupPage() {
   const [name, setName] = useState("");
@@ -55,9 +55,10 @@ export default function SignupPage() {
       } else {
         router.push("/dashboard");
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
       console.error("Signup error:", err);
-      setError(err.message || "Failed to create an account");
+      setError(errorMsg || "Failed to create an account");
       setLoading(false); // Make sure loading stops on error
     }
   };
@@ -72,7 +73,7 @@ export default function SignupPage() {
       } else {
         router.push("/dashboard");
       }
-    } catch (err: any) {
+    } catch {
       setError("Failed to sign up with Google");
     }
   };

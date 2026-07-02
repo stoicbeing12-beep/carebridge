@@ -7,7 +7,7 @@ export default function SafetyPage() {
         <div className="text-center mb-16">
           <h1 className="text-4xl font-bold text-slate-900 mb-4">Trust & Safety at CareBridge</h1>
           <p className="text-lg text-slate-600 max-w-2xl mx-auto">
-            Your safety and the well-being of your loved ones are our highest priorities. Here's how we ensure a secure environment for every family.
+            Your safety and the well-being of your loved ones are our highest priorities. Here&apos;s how we ensure a secure environment for every family.
           </p>
         </div>
 

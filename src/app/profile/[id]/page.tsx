@@ -10,15 +10,27 @@ import { Card, CardContent } from "@/components/ui/card"
 import { doc, getDoc, collection, query, where, getDocs } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { type Caregiver } from "@/types";
+import { caregivers as mockCaregivers, reviews as mockReviews } from "@/lib/data";
+import { useAuth } from "@/context/AuthContext";
+
+interface Review {
+  id: string;
+  author: string;
+  date: string;
+  rating: number;
+  text: string;
+}
 
 export default function CaregiverProfile({ params }: { params: Promise<{ id: string }> }) {
   const [caregiver, setCaregiver] = useState<Caregiver | null>(null);
-  const [reviews, setReviews] = useState<any[]>([]);
+  const [reviews, setReviews] = useState<Review[]>([]);
   const [loading, setLoading] = useState(true);
+  const { isDemoMode } = useAuth();
 
   useEffect(() => {
     const fetchCaregiverAndReviews = async () => {
       const { id } = await params;
+<<<<<<< HEAD
 
       // Fetch Caregiver
       const docRef = doc(db, "users", id);
@@ -34,12 +46,88 @@ export default function CaregiverProfile({ params }: { params: Promise<{ id: str
       setReviews(Array.isArray(reviewsList) ? reviewsList : []);
 
       setLoading(false);
+=======
+      let fetchedCaregiver: Caregiver | null = null;
+      let fetchedReviews: Review[] = [];
+      
+      try {
+        if (isDemoMode) {
+          throw new Error("Demo mode active");
+        }
+        // Fetch Caregiver
+        const docRef = doc(db, "users", id);
+        const snap = await getDoc(docRef);
+        if (snap.exists()) {
+          fetchedCaregiver = { id: snap.id, ...snap.data() } as Caregiver;
+        } else {
+          // If Firestore is running but this specific mock ID is queried (e.g. from homepage)
+          const mockCg = mockCaregivers.find(c => c.id === id);
+          if (mockCg) {
+            fetchedCaregiver = mockCg as unknown as Caregiver;
+          }
+        }
+
+        // Fetch Reviews
+        const reviewsQuery = query(collection(db, "reviews"), where("caregiverId", "==", id));
+        const reviewsSnap = await getDocs(reviewsQuery);
+        fetchedReviews = reviewsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Review));
+      } catch (err) {
+        console.warn("Profile page Firestore query failed, falling back to mock details:", err);
+        const mockCg = mockCaregivers.find(c => c.id === id);
+        if (mockCg) {
+          fetchedCaregiver = mockCg as unknown as Caregiver;
+        }
+      } finally {
+        // Merge with local reviews from localStorage
+        try {
+          const localBookingsRaw = localStorage.getItem("carebridge_bookings");
+          if (localBookingsRaw) {
+            const localBookings = JSON.parse(localBookingsRaw);
+            const localReviews = localBookings
+              .filter((b: any) => b.caregiverId === id && b.status === "completed" && b.rating && b.feedbackText)
+              .map((b: any) => ({
+                id: `local-rev-${b.id}`,
+                caregiverId: b.caregiverId,
+                author: "Family Member (Local)",
+                date: new Date().toLocaleDateString("en-US", { month: "short", year: "numeric" }),
+                rating: b.rating,
+                text: b.feedbackText,
+                createdAt: new Date()
+              }));
+            
+            // Add local reviews, avoiding duplicates if any somehow leaked
+            for (const lr of localReviews) {
+              if (!fetchedReviews.some(r => r.text === lr.text && r.rating === lr.rating)) {
+                fetchedReviews.unshift(lr);
+              }
+            }
+          }
+        } catch (e) {
+          console.warn("Failed to parse local reviews", e);
+        }
+
+        const finalReviews = fetchedReviews.length > 0 ? fetchedReviews : mockReviews.slice(0, 2);
+        setReviews(finalReviews);
+
+        if (fetchedCaregiver) {
+          // Dynamically update stats if we have actual reviews
+          if (fetchedReviews.length > 0) {
+            const sum = fetchedReviews.reduce((acc, r) => acc + r.rating, 0);
+            fetchedCaregiver.rating = Number((sum / fetchedReviews.length).toFixed(1));
+            fetchedCaregiver.reviews = fetchedReviews.length;
+          }
+          setCaregiver(fetchedCaregiver);
+        }
+
+        setLoading(false);
+      }
+>>>>>>> 6186fde8f90523c8470bb9e3f21f5dbf43b97bf8
     };
     fetchCaregiverAndReviews();
-  }, [params]);
+  }, [params, isDemoMode]);
 
-  const ensureArray = (val: any) => {
-    if (Array.isArray(val)) return val;
+  const ensureArray = (val: unknown): string[] => {
+    if (Array.isArray(val)) return val as string[];
     if (typeof val === "string") return val.split(",").map(s => s.trim()).filter(Boolean);
     return [];
   };
@@ -166,9 +254,14 @@ export default function CaregiverProfile({ params }: { params: Promise<{ id: str
                       </div>
                     </div>
                     <div className="flex text-amber-400">
+<<<<<<< HEAD
                       {[...Array(Number(review.rating) || 0)].map((_, i) => (
                         <Star key={i} className="w-4 h-4 fill-current" />
                       ))}                    </div>
+=======
+                      {[...Array(Math.max(0, Math.min(5, Math.floor(Number(review.rating) || 5))))].map((_, i) => <Star key={i} className="w-4 h-4 fill-current" />)}
+                    </div>
+>>>>>>> 6186fde8f90523c8470bb9e3f21f5dbf43b97bf8
                   </div>
                   <p className="text-slate-600">{review.text}</p>
                 </div>
@@ -194,7 +287,7 @@ export default function CaregiverProfile({ params }: { params: Promise<{ id: str
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="flex items-center gap-2"><MessageCircle className="w-4 h-4 text-slate-400" /> Speaks</span>
-                    <span className="font-semibold">{caregiver.languages.join(", ")}</span>
+                    <span className="font-semibold">{ensureArray(caregiver.languages).join(", ")}</span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="flex items-center gap-2"><ShieldCheck className="w-4 h-4 text-slate-400" /> Visa Status</span>
@@ -223,7 +316,7 @@ export default function CaregiverProfile({ params }: { params: Promise<{ id: str
                   <Link href={`/book/${caregiver.id}`}>Book Now</Link>
                 </Button>
                 <p className="text-xs text-center text-slate-500">
-                  You won't be charged yet
+                  You won&apos;t be charged yet
                 </p>
               </CardContent>
             </Card>

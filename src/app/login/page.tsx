@@ -9,7 +9,7 @@ import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Heart, Mail, Lock } from "lucide-react";
+import { Mail, Lock } from "lucide-react";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -17,7 +17,7 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const router = useRouter();
-  const { user, userData, loading: authLoading, signInWithGoogle, refreshUserData } = useAuth();
+  const { user, userData, loading: authLoading, signInWithGoogle, refreshUserData, dismissErrorOverlay } = useAuth();
 
   useEffect(() => {
     if (!authLoading && user && userData) {
@@ -31,7 +31,7 @@ export default function LoginPage() {
         router.push("/dashboard");
       }
     }
-  }, [user, userData, loading, router]);
+  }, [user, userData, authLoading, router]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -62,9 +62,16 @@ export default function LoginPage() {
         console.warn("No Firestore document found for user, redirecting to onboarding");
         router.push("/onboarding");
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Login error:", err);
-      setError(err.message || "Failed to log in");
+      const firebaseError = err as { code?: string; message?: string };
+      
+      if (firebaseError.code === "auth/invalid-credential" || firebaseError.code === "auth/user-not-found" || firebaseError.code === "auth/wrong-password") {
+        setError("Invalid email or password. Please verify your credentials and try again, or bypass using Demo Mode.");
+      } else {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        setError(errorMsg || "Failed to log in");
+      }
       setLoading(false);
     }
   };
@@ -78,7 +85,7 @@ export default function LoginPage() {
       // For now, let's just use the router to go to dashboard and let it handle redirects.
       // But a better way is to check the role.
       router.push("/dashboard"); 
-    } catch (err: any) {
+    } catch {
       setError("Failed to sign in with Google");
     }
   };
@@ -104,8 +111,20 @@ export default function LoginPage() {
           </CardHeader>
           <CardContent>
             {error && (
-              <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-md text-sm mb-4">
-                {error}
+              <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-2xl text-sm mb-4 space-y-2 animate-in fade-in duration-300">
+                <p className="font-medium">{error}</p>
+                {error.includes("Demo Mode") && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      dismissErrorOverlay();
+                      router.push("/dashboard");
+                    }}
+                    className="inline-flex items-center gap-1.5 text-xs font-bold text-red-800 hover:text-red-950 underline transition-colors cursor-pointer"
+                  >
+                    Quick Launch Demo Mode &rarr;
+                  </button>
+                )}
               </div>
             )}
             
@@ -196,7 +215,7 @@ export default function LoginPage() {
             </div>
 
             <p className="mt-6 text-center text-sm text-slate-600">
-              Don't have an account?{" "}
+              {"Don't have an account? "}
               <Link href="/signup" className="font-medium text-primary-600 hover:text-primary-500">
                 Sign up
               </Link>

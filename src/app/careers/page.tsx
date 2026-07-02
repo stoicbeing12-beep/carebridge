@@ -8,7 +8,7 @@ export default function CareersPage() {
         <div className="text-center mb-16">
           <h1 className="text-4xl font-bold text-slate-900 mb-4">Join the CareBridge Team</h1>
           <p className="text-lg text-slate-600 max-w-2xl mx-auto">
-            Help us redefine the future of home care. We're looking for passionate individuals who want to make a real difference in families' lives.
+            Help us redefine the future of home care. We&apos;re looking for passionate individuals who want to make a real difference in families&apos; lives.
           </p>
         </div>
 
